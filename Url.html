@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Separate Links from Text</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 20px; color: #111; }
+    h1 { margin-bottom: 8px; }
+    .container { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+    .panel { border: 1px solid #ddd; padding: 12px; border-radius: 8px; background: #fff; }
+    label { display:block; margin-bottom:6px; font-weight:600; }
+    textarea { width:100%; height:220px; padding:10px; box-sizing:border-box; font-family: inherit; font-size:14px; }
+    input[type="file"] { margin-top:8px; }
+    .controls { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
+    button { padding:8px 12px; border-radius:6px; border:1px solid #888; background:#f5f5f5; cursor:pointer; }
+    button.primary { background:#0969da; color:white; border-color:#0759c6; }
+    .links-list { list-style:none; padding-left:0; margin:0; }
+    .links-list li { margin-bottom:8px; word-break:break-all; }
+    pre { white-space:pre-wrap; margin:0; font-family:inherit; font-size:14px; }
+    .hint { color:#666; font-size:13px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h1>Separate Links from Text</h1>
+  <p class="hint">Paste or type text in the left box, or import a .txt file. Click "Separate" to extract links and show the remaining text.</p>
+
+  <div>
+    <div style="margin-bottom:8px;">
+      <input id="fileInput" type="file" accept=".txt" />
+      <button id="clearBtn">Clear</button>
+      <button id="separateBtn" class="primary">Separate</button>
+      <button id="copyLinksBtn">Copy Links</button>
+      <button id="copyTextBtn">Copy Text</button>
+    </div>
+  </div>
+
+  <div class="container" role="region" aria-label="Text and results">
+    <div class="panel" aria-labelledby="inputLabel">
+      <label id="inputLabel" for="textInput">Input text</label>
+      <textarea id="textInput" placeholder="Paste or type text here..."></textarea>
+      <div class="hint">You can also drag & drop a .txt file onto the textarea.</div>
+    </div>
+
+    <div style="display:grid; gap:12px;">
+      <div class="panel" aria-labelledby="linksLabel">
+        <label id="linksLabel">Links found</label>
+        <ul id="linksList" class="links-list" aria-live="polite"></ul>
+        <div id="noLinks" class="hint" style="display:none;">No links found.</div>
+      </div>
+
+      <div class="panel" aria-labelledby="textLabel">
+        <label id="textLabel">Remaining text (links removed)</label>
+        <pre id="remainingText" aria-live="polite"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const textInput = document.getElementById('textInput');
+    const fileInput = document.getElementById('fileInput');
+    const separateBtn = document.getElementById('separateBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const linksList = document.getElementById('linksList');
+    const remainingText = document.getElementById('remainingText');
+    const noLinks = document.getElementById('noLinks');
+    const copyLinksBtn = document.getElementById('copyLinksBtn');
+    const copyTextBtn = document.getElementById('copyTextBtn');
+
+    // Regex to detect URLs (http/https and www), plus simple email detection
+    const urlRx = /https?:\/\/[^\s<>]+/ig;
+    const wwwRx = /(^|\\s)(www\\.[^\\s<>]+)/ig;
+    const emailRx = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/ig;
+
+    function trimTrailingPunct(s){
+      // remove trailing punctuation characters commonly attached to URLs in text
+      return s.replace(/[.,;:!?)\\]\\}]+$/,'');
+    }
+
+    function extractLinks(text){
+      let links = [];
+      // find http(s):// links
+      let m;
+      while ((m = urlRx.exec(text)) !== null) {
+        links.push(m[0]);
+      }
+      // find www. links (add protocol later)
+      while ((m = wwwRx.exec(text)) !== null) {
+        // m[2] contains the www... part
+        const candidate = m[2];
+        links.push(candidate.startsWith('http') ? candidate : 'http://' + candidate);
+      }
+      // find emails and convert to mailto:
+      while ((m = emailRx.exec(text)) !== null) {
+        const email = m[0];
+        links.push('mailto:' + email);
+      }
+
+      // clean and unique
+      links = links.map(l => trimTrailingPunct(l));
+      // preserve order but make unique
+      const seen = new Set();
+      const uniq = [];
+      for (const l of links) {
+        if (!seen.has(l)) { seen.add(l); uniq.push(l); }
+      }
+      return uniq;
+    }
+
+    function removeLinksFromText(text, links){
+      let cleaned = text;
+      for (const l of links) {
+        // remove both exact forms (with or without protocol for www)
+        const plain = l.replace(/^https?:\\/\\//i, '');
+        // Use simple replace to remove occurrences; use regex escape
+        const esc = l.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+        const escPlain = plain.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+        cleaned = cleaned.replace(new RegExp(esc, 'g'), ' ');
+        cleaned = cleaned.replace(new RegExp(escPlain, 'g'), ' ');
+        // also remove mailto: prefix occurrences
+        cleaned = cleaned.replace(new RegExp('mailto:' + escPlain, 'g'), ' ');
+      }
+      // collapse multiple spaces & trim
+      return cleaned.replace(/\\s{2,}/g,' ').trim();
+    }
+
+    function renderResults(text){
+      const links = extractLinks(text);
+      linksList.innerHTML = '';
+      if (links.length === 0) {
+        noLinks.style.display = 'block';
+      } else {
+        noLinks.style.display = 'none';
+        links.forEach(url => {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = url;
+          a.textContent = url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          li.appendChild(a);
+          linksList.appendChild(li);
+        });
+      }
+      const cleaned = removeLinksFromText(text, links);
+      // safe text rendering
+      remainingText.textContent = cleaned;
+    }
+
+    separateBtn.addEventListener('click', () => {
+      renderResults(textInput.value || '');
+    });
+
+    clearBtn.addEventListener('click', () => {
+      textInput.value = '';
+      linksList.innerHTML = '';
+      remainingText.textContent = '';
+      noLinks.style.display = 'none';
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        textInput.value = String(reader.result);
+        renderResults(textInput.value);
+      };
+      reader.readAsText(f);
+    });
+
+    // Drag & drop support onto textarea
+    textInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    textInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      if (f.type && f.type !== 'text/plain') {
+        // still try to read, but warn
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        textInput.value = String(reader.result);
+        renderResults(textInput.value);
+      };
+      reader.readAsText(f);
+    });
+
+    // copy helpers
+    copyLinksBtn.addEventListener('click', async () => {
+      const links = Array.from(linksList.querySelectorAll('a')).map(a => a.href).join('\\n');
+      try {
+        await navigator.clipboard.writeText(links);
+        copyLinksBtn.textContent = 'Copied!';
+        setTimeout(()=> copyLinksBtn.textContent = 'Copy Links', 1200);
+      } catch (e) {
+        alert('Copy failed: ' + e);
+      }
+    });
+
+    copyTextBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(remainingText.textContent || '');
+        copyTextBtn.textContent = 'Copied!';
+        setTimeout(()=> copyTextBtn.textContent = 'Copy Text', 1200);
+      } catch (e) {
+        alert('Copy failed: ' + e);
+      }
+    });
+
+    // quick demo: analyze paste immediately (optional)
+    textInput.addEventListener('paste', () => {
+      setTimeout(() => renderResults(textInput.value), 50);
+    });
+
+    // initial empty state
+    noLinks.style.display = 'none';
+  </script>
+</body>
+</html>
